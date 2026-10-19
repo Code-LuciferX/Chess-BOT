@@ -5,9 +5,12 @@ Boardwise is a responsive chess position analysis tool that runs in your browser
 ## Features
 
 - Play through legal moves with `chess.js`, with legal destination markers and a move list.
+- Play against the local Stockfish bot as either color, with Easy, Medium, and Hard strength settings.
+- Choose a queen, rook, bishop, or knight when promoting a pawn.
 - Undo the last move or flip the board orientation.
 - Build a custom position using the piece palette, erase pieces, and choose which side moves next.
 - Load a position from FEN or copy the current FEN to the clipboard.
+- Download the recorded game as PGN, including custom starting positions.
 - Analyze the current position with Stockfish running locally in a browser worker. The search runs to depth 16 and displays the evaluation, recommended move, and highlighted origin and destination squares.
 - View the wood-style board with equal-sized squares that stay aligned as the position changes.
 
@@ -46,10 +49,13 @@ The Vite configuration copies the Stockfish JavaScript and WebAssembly files fro
 ## Using the app
 
 - Select a piece that belongs to the side to move, then select one of its legal destination squares.
+- Choose **Vs bot**, select your color and a bot strength, then make a move when it is your turn.
+- When a pawn reaches the opposite end of the board, choose its promotion piece from the dialog.
 - Use **Undo** to restore the previous position and **Flip** to change the board orientation.
 - Select **Set up** to place or erase pieces, then select the side to move and choose **Done** when ready.
 - Edit the FEN field and select **Load FEN** to load a position. Press Ctrl+Enter (or Cmd+Enter on macOS) from the field to load it as well.
 - Select **Copy** beside the FEN field to copy the current position.
+- Select **PGN** in the move list to download the recorded moves as a `.pgn` file.
 - Select **Find best move** to start Stockfish analysis. The button is unavailable while the engine is loading or searching, in setup mode, or when the game is over.
 
 ## Project structure

@@ -181,7 +181,7 @@ button {
   box-shadow: 0 2px 7px rgba(0, 0, 0, 0.1);
 }
 
-.play-as-control {
+.bot-setting {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -189,7 +189,7 @@ button {
   font-size: 0.9rem;
 }
 
-.play-as-control select {
+.bot-setting select {
   border: 1px solid rgba(24, 35, 28, 0.12);
   border-radius: 8px;
   padding: 7px 28px 7px 10px;
@@ -661,6 +661,23 @@ h1 {
   letter-spacing: 0.16em;
   color: #5a6d60;
   text-transform: uppercase;
+}
+
+.move-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0;
+}
+
+.move-actions .copy-button {
+  padding: 6px 9px;
+  font-size: 0.78rem;
+}
+
+.move-actions .copy-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .depth-tag {

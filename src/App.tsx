@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleHelp,
   Copy,
+  Download,
   Sparkles,
   Undo2,
 } from "lucide-react";
@@ -25,8 +26,14 @@ const PIECE_LABELS: Record<PieceSymbol, string> = {
   k: "King",
 };
 const UCI_ENGINE = "stockfish-19-lite-single.js";
+const BOT_DIFFICULTIES = {
+  easy: { skill: 3, depth: 8 },
+  medium: { skill: 10, depth: 12 },
+  hard: { skill: 20, depth: 16 },
+} as const;
 
 type PieceChoice = Piece | "empty";
+type BotDifficulty = keyof typeof BOT_DIFFICULTIES;
 type MoveRecord = { san: string; color: Color; beforeFen: string };
 type Search = { fen: string; score: string; depth: number; purpose: "analysis" | "bot" };
 type BestMove = { from: Square; to: Square; san: string; score: string; depth: number };
@@ -53,6 +60,7 @@ function App() {
   const [legalSquares, setLegalSquares] = useState<Square[]>([]);
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
   const [botColor, setBotColor] = useState<Color | null>(null);
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>("medium");
   const [moveLog, setMoveLog] = useState<MoveRecord[]>([]);
   const [flipped, setFlipped] = useState(false);
   const [engineState, setEngineState] = useState<EngineState>("loading");
@@ -171,9 +179,10 @@ function App() {
     setEngineState("thinking");
     setEngineMessage("Stockfish is thinking");
     searchRef.current = { fen: positionFen, score: "--", depth: 0, purpose: "bot" };
+    worker.postMessage(`setoption name Skill Level value ${BOT_DIFFICULTIES[botDifficulty].skill}`);
     worker.postMessage(`position fen ${positionFen}`);
-    worker.postMessage("go depth 12");
-  }, [botColor, engineState, positionFen, setupMode, turn]);
+    worker.postMessage(`go depth ${BOT_DIFFICULTIES[botDifficulty].depth}`);
+  }, [botColor, botDifficulty, engineState, positionFen, setupMode, turn]);
 
   function commitPosition(next: Chess, clearMoves = true) {
     if (searchRef.current) workerRef.current?.postMessage("stop");
@@ -332,6 +341,29 @@ function App() {
     }
   }
 
+  function exportPgn() {
+    if (moveLog.length === 0) return;
+
+    try {
+      const pgnGame = new Chess(moveLog[0].beforeFen);
+      for (const move of moveLog) pgnGame.move(move.san);
+      pgnGame.setHeader("White", botColor === "w" ? `Stockfish (${botDifficulty})` : "Player");
+      pgnGame.setHeader("Black", botColor === "b" ? `Stockfish (${botDifficulty})` : "Player");
+
+      const file = new Blob([`${pgnGame.pgn()}\n`], { type: "application/x-chess-pgn" });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "boardwise-game.pgn";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      setFenError("Could not export this move list as PGN.");
+    }
+  }
+
   async function analyzePosition() {
     const worker = workerRef.current;
     if (!worker || engineState === "loading" || engineState === "error" || game.isGameOver()) return;
@@ -426,15 +458,23 @@ function App() {
               <button className={!botColor ? "mode-active" : ""} onClick={() => setGameMode(null)} type="button">Analysis</button>
               <button className={botColor ? "mode-active" : ""} onClick={() => setGameMode("w")} type="button">Vs bot</button>
             </div>
-            {botColor && (
-              <label className="play-as-control">
+            {botColor && <>
+              <label className="bot-setting">
                 Play as
                 <select aria-label="Play as" onChange={(event) => setGameMode(event.target.value as Color)} value={botColor}>
                   <option value="w">White</option>
                   <option value="b">Black</option>
                 </select>
               </label>
-            )}
+              <label className="bot-setting">
+                Strength
+                <select aria-label="Bot strength" onChange={(event) => setBotDifficulty(event.target.value as BotDifficulty)} value={botDifficulty}>
+                  <option value="easy">Easy</option>
+                  <option value="medium">Medium</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </label>
+            </>}
           </div>
 
           {setupMode && (
@@ -566,7 +606,13 @@ function App() {
           </div>
 
           <div className="moves-section">
-            <div className="subsection-heading"><span>MOVE LIST</span><button className="text-button" onClick={clearBoard} type="button">Clear board</button></div>
+            <div className="subsection-heading">
+              <span>MOVE LIST</span>
+              <div className="move-actions">
+                <button className="copy-button" disabled={moveLog.length === 0} onClick={exportPgn} title="Download game as PGN" type="button"><Download size={15} />PGN</button>
+                <button className="text-button" onClick={clearBoard} type="button">Clear board</button>
+              </div>
+            </div>
             {movePairs.length ? (
               <div className="move-list" aria-label="Moves played">
                 {movePairs.map((pair) => <div className="move-row" key={pair.number}><span className="move-number">{pair.number}.</span><span>{pair.white ?? "—"}</span><span>{pair.black ?? ""}</span></div>)}
