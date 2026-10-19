@@ -28,9 +28,10 @@ const UCI_ENGINE = "stockfish-19-lite-single.js";
 
 type PieceChoice = Piece | "empty";
 type MoveRecord = { san: string; color: Color; beforeFen: string };
-type Search = { fen: string; score: string; depth: number };
+type Search = { fen: string; score: string; depth: number; purpose: "analysis" | "bot" };
 type BestMove = { from: Square; to: Square; san: string; score: string; depth: number };
 type EngineState = "loading" | "ready" | "thinking" | "error";
+type PendingPromotion = { from: Square; to: Square; color: Color };
 
 function formatScore(kind: string, value: number, turn: string) {
   const whiteValue = turn === "b" ? -value : value;
@@ -50,6 +51,8 @@ function App() {
   const [pieceChoice, setPieceChoice] = useState<PieceChoice>({ type: "p", color: "w" });
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [legalSquares, setLegalSquares] = useState<Square[]>([]);
+  const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
+  const [botColor, setBotColor] = useState<Color | null>(null);
   const [moveLog, setMoveLog] = useState<MoveRecord[]>([]);
   const [flipped, setFlipped] = useState(false);
   const [engineState, setEngineState] = useState<EngineState>("loading");
@@ -125,6 +128,17 @@ function App() {
         const to = uci.slice(2, 4) as Square;
         const candidate = new Chess(completedSearch.fen);
         const move = candidate.move({ from, to, promotion: (uci[4] as PieceSymbol | undefined) ?? "q" });
+        if (completedSearch.purpose === "bot") {
+          const nextFen = candidate.fen();
+          setPositionFen(nextFen);
+          setFenDraft(nextFen);
+          setSelectedSquare(null);
+          setLegalSquares([]);
+          setMoveLog((records) => [...records, { san: move.san, color: move.color, beforeFen: completedSearch.fen }]);
+          setEngineMessage(candidate.isGameOver() ? "Game over" : "Your move");
+          setEngineState("ready");
+          return;
+        }
         setBestMove({ from, to, san: move.san, score: completedSearch.score, depth: completedSearch.depth });
         setEngineMessage(`Best line found at depth ${completedSearch.depth}`);
       } catch {
@@ -147,6 +161,20 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!botColor || setupMode || turn === botColor || game.isGameOver() || engineState !== "ready") return;
+    const worker = workerRef.current;
+    if (!worker) return;
+
+    setBestMove(null);
+    setEvaluation("...");
+    setEngineState("thinking");
+    setEngineMessage("Stockfish is thinking");
+    searchRef.current = { fen: positionFen, score: "--", depth: 0, purpose: "bot" };
+    worker.postMessage(`position fen ${positionFen}`);
+    worker.postMessage("go depth 12");
+  }, [botColor, engineState, positionFen, setupMode, turn]);
+
   function commitPosition(next: Chess, clearMoves = true) {
     if (searchRef.current) workerRef.current?.postMessage("stop");
     const fen = next.fen();
@@ -155,6 +183,7 @@ function App() {
     setFenError("");
     setSelectedSquare(null);
     setLegalSquares([]);
+    setPendingPromotion(null);
     setBestMove(null);
     setEvaluation("--");
     searchRef.current = null;
@@ -163,7 +192,35 @@ function App() {
     if (clearMoves) setMoveLog([]);
   }
 
+  function setGameMode(color: Color | null) {
+    if (searchRef.current) workerRef.current?.postMessage("stop");
+    searchRef.current = null;
+    setBotColor(color);
+    setBestMove(null);
+    setEngineState((current) => current === "thinking" ? "ready" : current);
+    setEngineMessage(color ? "Bot game ready" : "Ready when you are");
+  }
+
+  function applyMove(from: Square, to: Square, promotion?: PieceSymbol) {
+    const current = new Chess(positionFen);
+    const move = current.move({ from, to, promotion });
+    if (searchRef.current) workerRef.current?.postMessage("stop");
+    searchRef.current = null;
+    const nextFen = current.fen();
+    setPositionFen(nextFen);
+    setFenDraft(nextFen);
+    setSelectedSquare(null);
+    setLegalSquares([]);
+    setPendingPromotion(null);
+    setBestMove(null);
+    setEvaluation("--");
+    setEngineState((currentState) => currentState === "thinking" ? "ready" : currentState);
+    setEngineMessage(botColor ? "Your move" : "Ready when you are");
+    setMoveLog((records) => [...records, { san: move.san, color: move.color, beforeFen: positionFen }]);
+  }
+
   function handleSquareClick(square: Square) {
+    if (pendingPromotion || (botColor && turn !== botColor)) return;
     const current = new Chess(positionFen);
     if (setupMode) {
       const existing = current.get(square);
@@ -198,18 +255,14 @@ function App() {
     }
 
     try {
-      const move = current.move({ from: selectedSquare, to: square, promotion: "q" });
-      setPositionFen(current.fen());
-      setFenDraft(current.fen());
-      setSelectedSquare(null);
-      setLegalSquares([]);
-      setBestMove(null);
-      setEvaluation("--");
-      if (searchRef.current) workerRef.current?.postMessage("stop");
-      searchRef.current = null;
-      setEngineState((currentState) => currentState === "thinking" ? "ready" : currentState);
-      setEngineMessage("Ready when you are");
-      setMoveLog((records) => [...records, { san: move.san, color: move.color, beforeFen: positionFen }]);
+      const promotionMoves = current.moves({ square: selectedSquare, verbose: true })
+        .filter((move) => move.to === square && move.promotion);
+      if (promotionMoves.length) {
+        setPendingPromotion({ from: selectedSquare, to: square, color: current.turn() });
+        return;
+      }
+      current.move({ from: selectedSquare, to: square });
+      applyMove(selectedSquare, square);
     } catch {
       const piece = current.get(square);
       if (piece?.color === current.turn()) {
@@ -252,9 +305,20 @@ function App() {
   }
 
   function undoMove() {
-    const previous = moveLog[moveLog.length - 1];
-    if (!previous) return;
-    setMoveLog((records) => records.slice(0, -1));
+    let undoIndex = moveLog.length - 1;
+    if (botColor) {
+      undoIndex = -1;
+      for (let index = moveLog.length - 1; index >= 0; index -= 1) {
+        if (moveLog[index].color !== botColor) {
+          undoIndex = index;
+          break;
+        }
+      }
+      if (undoIndex < 0) undoIndex = moveLog.findIndex((move) => move.color === botColor);
+    }
+    if (undoIndex < 0) return;
+    const previous = moveLog[undoIndex];
+    setMoveLog((records) => records.slice(0, undoIndex));
     commitPosition(new Chess(previous.beforeFen), false);
   }
 
@@ -278,7 +342,7 @@ function App() {
 
     try {
       await readyPromiseRef.current;
-      searchRef.current = { fen: positionFen, score: "--", depth: 0 };
+      searchRef.current = { fen: positionFen, score: "--", depth: 0, purpose: "analysis" };
       worker.postMessage(`position fen ${positionFen}`);
       worker.postMessage("go depth 16");
     } catch {
@@ -357,6 +421,22 @@ function App() {
             <div className="turn-indicator"><span className={`turn-piece turn-${turn}`} />{turn === "w" ? "White" : "Black"}</div>
           </div>
 
+          <div className="game-mode-controls">
+            <div className="mode-switch" role="group" aria-label="Game mode">
+              <button className={!botColor ? "mode-active" : ""} onClick={() => setGameMode(null)} type="button">Analysis</button>
+              <button className={botColor ? "mode-active" : ""} onClick={() => setGameMode("w")} type="button">Vs bot</button>
+            </div>
+            {botColor && (
+              <label className="play-as-control">
+                Play as
+                <select aria-label="Play as" onChange={(event) => setGameMode(event.target.value as Color)} value={botColor}>
+                  <option value="w">White</option>
+                  <option value="b">Black</option>
+                </select>
+              </label>
+            )}
+          </div>
+
           {setupMode && (
             <div className="setup-toolbar">
               <div className="piece-palette" aria-label="Choose a piece to place">
@@ -391,16 +471,42 @@ function App() {
             <div className="chessboard" role="grid" aria-label="Chess position">
               {Array.from({ length: 8 }, (_, row) => Array.from({ length: 8 }, (_, column) => renderSquare(row, column)))}
             </div>
+            {pendingPromotion && (
+              <div className="promotion-backdrop">
+                <div aria-labelledby="promotion-title" aria-modal="true" className="promotion-dialog" role="dialog">
+                  <h2 id="promotion-title">Promote pawn</h2>
+                  <div className="promotion-options">
+                    {(["q", "r", "b", "n"] as const).map((type) => (
+                      <button
+                        aria-label={`Promote to ${PIECE_LABELS[type]}`}
+                        className="promotion-option"
+                        key={type}
+                        onClick={() => applyMove(pendingPromotion.from, pendingPromotion.to, type)}
+                        type="button"
+                      >
+                        <span className={`chess-piece piece-${pendingPromotion.color}`}>{PIECE_GLYPHS[pendingPromotion.color][type]}</span>
+                        <span>{PIECE_LABELS[type]}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button className="promotion-cancel" onClick={() => {
+                    setPendingPromotion(null);
+                    setSelectedSquare(null);
+                    setLegalSquares([]);
+                  }} type="button">Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="board-controls">
-            <button className="control-button" onClick={undoMove} disabled={moveLog.length === 0} title="Undo last move" type="button">
+            <button className="control-button" onClick={undoMove} disabled={botColor ? !moveLog.some((move) => move.color === botColor) : moveLog.length === 0} title="Undo last move" type="button">
               <Undo2 size={17} /><span>Undo</span>
             </button>
             <button className="control-button" onClick={() => setFlipped((value) => !value)} title="Flip board" type="button">
               <ArrowDownUp size={17} /><span>Flip</span>
             </button>
-            <span className="board-hint">{setupMode ? "Choose a piece, then a square" : "Select a piece, then its destination"}</span>
+            <span className="board-hint">{setupMode ? "Choose a piece, then a square" : botColor && turn !== botColor ? "Stockfish is thinking..." : "Select a piece, then its destination"}</span>
             <button
               className={`setup-button ${setupMode ? "setup-done" : ""}`}
               onClick={() => setSetupMode((value) => !value)}
